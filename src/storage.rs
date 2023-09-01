@@ -1,11 +1,12 @@
 use chrono::{DateTime, Utc};
 use rocket::fs::NamedFile;
 use std::fs;
-use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::SystemTime;
+use tokio::fs as tokio_fs;
 
 static STORAGE_DIRECTORY: &str = "data_storage";
+pub static DEFAULT_FILE: &str = "1990-01-01-01-01-01.lua";
 
 pub fn generate_file_name(group: &str, entity: &str) -> String {
     let system_time = SystemTime::now();
@@ -97,7 +98,11 @@ pub async fn extract_file(
     NamedFile::open(build_file_name(group, entity, file_name)).await
 }
 
-pub async fn cleanup(group: &str, entity: &str) {
-    let files = collect_files(group, entity);
-    files[..3]
+pub async fn cleanup(group: &str, entity: &str) -> std::io::Result<()> {
+    let mut files = collect_files(group, entity);
+    let _ = files.split_off(files.len() - 3);
+    for file_name in files {
+        tokio_fs::remove_file(build_file_name(group, entity, file_name)).await?;
+    }
+    return Ok(());
 }

@@ -3,16 +3,14 @@ extern crate rocket;
 use rocket::config::Config;
 use rocket::data::{Limits, ToByteUnit};
 use rocket::fs::NamedFile;
-use rocket::fs::TempFile;
 use rocket::http::Status;
 use rocket::request::{FromRequest, Outcome, Request};
 use rocket::response::status::NotFound;
 use rocket::serde::{json::Json, Serialize};
 use rocket::tokio::io::AsyncReadExt;
 use rocket::Data;
-use std::io::Error;
 use tokio::fs::File;
-use tokio::io::{AsyncWriteExt, BufWriter};
+use tokio::io::AsyncWriteExt;
 
 mod storage;
 
@@ -40,11 +38,6 @@ impl<'r> FromRequest<'r> for ApiKey<'r> {
             Some(_) => Outcome::Failure((Status::BadRequest, ApiKeyError::Invalid)),
         }
     }
-}
-
-#[derive(FromForm)]
-struct Upload<'f> {
-    file: TempFile<'f>,
 }
 
 #[derive(Serialize)]
@@ -87,10 +80,15 @@ async fn post_file(
         if old_data == new_data.value {
             return Ok(());
         }
-        println!("Files are not equivalent (?), {}, {}", old_data.last().unwrap(), new_data.value.last().unwrap());
+        println!(
+            "Files are not equivalent (?), {}, {}",
+            old_data.last().unwrap(),
+            new_data.value.last().unwrap()
+        );
         let mut new_file = File::create(file_name).await?;
         let mut buffer = tokio::io::BufWriter::new(&mut new_file);
         buffer.write(&new_data.value).await?;
+        storage::cleanup(group, entity).await?;
     }
     Ok(())
 }
@@ -105,7 +103,10 @@ async fn get_versions(group: &str, entity: &str) -> Json<Files> {
 #[get("/storage/<group>/<entity>/info")]
 async fn get_info(group: &str, entity: &str) -> Json<Info> {
     let files = storage::collect_files(group, entity);
-    let newest_file: String = files.last().unwrap_or(&String::from("1990")).to_string();
+    let newest_file: String = files
+        .last()
+        .unwrap_or(&String::from(storage::DEFAULT_FILE))
+        .to_string();
     return Json(Info {
         latest: newest_file.replace(".lua", ""),
     });
