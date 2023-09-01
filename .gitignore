@@ -21,3 +21,4 @@ Cargo.lock
 
 # Added by application
 /data_storage
+App.toml

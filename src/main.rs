@@ -1,16 +1,19 @@
 #[macro_use]
 extern crate rocket;
-use rocket::config::Config;
 use rocket::data::{Limits, ToByteUnit};
 use rocket::fs::NamedFile;
 use rocket::http::Status;
 use rocket::request::{FromRequest, Outcome, Request};
 use rocket::response::status::NotFound;
-use rocket::serde::{json::Json, Serialize};
+use rocket::serde::{json::Json, Serialize, Deserialize};
 use rocket::tokio::io::AsyncReadExt;
 use rocket::Data;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
+use rocket::fairing::AdHoc;
+use rocket::State;
+
+use rocket::figment::{Figment, Profile, providers::{Format, Toml, Serialized, Env}};
 
 mod storage;
 
@@ -27,14 +30,18 @@ impl<'r> FromRequest<'r> for ApiKey<'r> {
     type Error = ApiKeyError;
 
     async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
-        /// Returns true if `key` is a valid API key string.
-        fn is_valid(key: &str) -> bool {
-            key == "valid_api_key"
+        let valid_key_outcome = req.guard::<&State<MyConfig>>().await
+        .map(|my_config| my_config.api_key.clone());
+
+        if !valid_key_outcome.is_success() {
+            return Outcome::Failure((Status::InternalServerError, ApiKeyError::Missing))
         }
+        let binding = valid_key_outcome.unwrap();
+        let valid_key = binding.as_str();
 
         match req.headers().get_one("x-api-key") {
             None => Outcome::Failure((Status::BadRequest, ApiKeyError::Missing)),
-            Some(key) if is_valid(key) => Outcome::Success(ApiKey(key)),
+            Some(key) if key == valid_key => Outcome::Success(ApiKey(key)),
             Some(_) => Outcome::Failure((Status::BadRequest, ApiKeyError::Invalid)),
         }
     }
@@ -80,11 +87,6 @@ async fn post_file(
         if old_data == new_data.value {
             return Ok(());
         }
-        println!(
-            "Files are not equivalent (?), {}, {}",
-            old_data.last().unwrap(),
-            new_data.value.last().unwrap()
-        );
         let mut new_file = File::create(file_name).await?;
         let mut buffer = tokio::io::BufWriter::new(&mut new_file);
         buffer.write(&new_data.value).await?;
@@ -125,12 +127,29 @@ async fn get_latest(group: &str, entity: &str) -> Result<NamedFile, NotFound<Str
         .map_err(|e| NotFound(e.to_string()));
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(crate = "rocket::serde")]
+struct MyConfig {
+    api_key: String,
+}
+
+impl Default for MyConfig {
+    fn default() -> MyConfig {
+        MyConfig { api_key: "test".into(), }
+    }
+}
+
 #[launch]
 fn rocket() -> _ {
     storage::ensure_dir();
-    let mut config = Config::default();
-    config.limits = Limits::default().limit("form", 1.mebibytes());
-    rocket::build()
-        .configure(config)
+    let figment = Figment::from(rocket::Config::default())
+        .merge(Serialized::defaults(MyConfig::default()))
+        .merge(Toml::file("App.toml").nested())
+        .merge(Env::prefixed("APP_").global())
+        .merge(("limits", Limits::default().limit("form", 1.mebibytes())))
+        .select(Profile::from_env_or("APP_PROFILE", "default"));
+
+    rocket::custom(figment)
         .mount("/", routes![post_file, get_versions, get_info, get_latest])
+        .attach(AdHoc::config::<MyConfig>())
 }
