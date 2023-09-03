@@ -100,9 +100,11 @@ pub async fn extract_file(
 
 pub async fn cleanup(group: &str, entity: &str) -> std::io::Result<()> {
     let mut files = collect_files(group, entity);
-    let _ = files.split_off(files.len() - 3);
-    for file_name in files {
-        tokio_fs::remove_file(build_file_name(group, entity, file_name)).await?;
+    if files.len() > 3 {
+        let _ = files.split_off(files.len() - 3);
+        for file_name in files {
+            tokio_fs::remove_file(build_file_name(group, entity, file_name)).await?;
+        }
     }
     return Ok(());
 }
