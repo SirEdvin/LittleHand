@@ -1,19 +1,22 @@
 #[macro_use]
 extern crate rocket;
 use rocket::data::{Limits, ToByteUnit};
+use rocket::fairing::AdHoc;
 use rocket::fs::NamedFile;
 use rocket::http::Status;
 use rocket::request::{FromRequest, Outcome, Request};
 use rocket::response::status::NotFound;
-use rocket::serde::{json::Json, Serialize, Deserialize};
+use rocket::serde::{json::Json, Deserialize, Serialize};
 use rocket::tokio::io::AsyncReadExt;
 use rocket::Data;
+use rocket::State;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
-use rocket::fairing::AdHoc;
-use rocket::State;
 
-use rocket::figment::{Figment, Profile, providers::{Format, Toml, Serialized, Env}};
+use rocket::figment::{
+    providers::{Env, Format, Serialized, Toml},
+    Figment, Profile,
+};
 
 mod storage;
 
@@ -30,11 +33,13 @@ impl<'r> FromRequest<'r> for ApiKey<'r> {
     type Error = ApiKeyError;
 
     async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
-        let valid_key_outcome = req.guard::<&State<MyConfig>>().await
-        .map(|my_config| my_config.api_key.clone());
+        let valid_key_outcome = req
+            .guard::<&State<MyConfig>>()
+            .await
+            .map(|my_config| my_config.api_key.clone());
 
         if !valid_key_outcome.is_success() {
-            return Outcome::Failure((Status::InternalServerError, ApiKeyError::Missing))
+            return Outcome::Failure((Status::InternalServerError, ApiKeyError::Missing));
         }
         let binding = valid_key_outcome.unwrap();
         let valid_key = binding.as_str();
@@ -65,7 +70,7 @@ async fn post_file(
     entity: &str,
     data: Data<'_>,
     _key: ApiKey<'_>,
-) -> std::io::Result<()> {
+) -> std::io::Result<String> {
     let files = storage::collect_files(group, entity);
     let newest_file = files.last();
     let file_name = storage::generate_file_name(group, entity);
@@ -85,14 +90,16 @@ async fn post_file(
         }
 
         if old_data == new_data.value {
-            return Ok(());
+            return Ok("File is a duplication and will be ignored".to_string());
         }
-        let mut new_file = File::create(file_name).await?;
+        let mut new_file = File::create(file_name.clone()).await?;
         let mut buffer = tokio::io::BufWriter::new(&mut new_file);
+        println!("Writing {} to file {}", new_data.value.len(), file_name);
         buffer.write(&new_data.value).await?;
+        buffer.shutdown().await?;
         storage::cleanup(group, entity).await?;
     }
-    Ok(())
+    Ok("File uploaded successfully".to_string())
 }
 
 #[get("/storage/<group>/<entity>/versions")]
@@ -135,7 +142,9 @@ struct MyConfig {
 
 impl Default for MyConfig {
     fn default() -> MyConfig {
-        MyConfig { api_key: "test".into(), }
+        MyConfig {
+            api_key: "test".into(),
+        }
     }
 }
 
