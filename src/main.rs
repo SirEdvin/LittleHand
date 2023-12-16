@@ -134,6 +134,11 @@ async fn get_latest(group: &str, entity: &str) -> Result<NamedFile, NotFound<Str
         .map_err(|e| NotFound(e.to_string()));
 }
 
+#[get("/health")]
+async fn check_health() -> String {
+    return String::from("ok");
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(crate = "rocket::serde")]
 struct MyConfig {
@@ -159,6 +164,9 @@ fn rocket() -> _ {
         .select(Profile::from_env_or("APP_PROFILE", "default"));
 
     rocket::custom(figment)
-        .mount("/", routes![post_file, get_versions, get_info, get_latest])
+        .mount(
+            "/",
+            routes![post_file, get_versions, get_info, get_latest, check_health],
+        )
         .attach(AdHoc::config::<MyConfig>())
 }
